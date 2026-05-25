@@ -242,14 +242,23 @@ def build_initial_state(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_llm_once(state: Dict[str, Any]) -> Dict[str, Any]:
     client = build_client()
-    response = client.chat.completions.create(
-        model=ARK_MODEL,
-        messages=state["messages"],
-        temperature=0.2,
-        max_tokens=420,
-        thinking={"type": "disabled"},
-        stream=False,
-    )
+    request_kwargs: Dict[str, Any] = {
+        "model": ARK_MODEL,
+        "messages": state["messages"],
+        "temperature": 0.2,
+        "max_tokens": 420,
+        "stream": False,
+    }
+    # Some production environments pin older openai-python versions that
+    # don't support the `thinking` argument yet.
+    request_kwargs["thinking"] = {"type": "disabled"}
+    try:
+        response = client.chat.completions.create(**request_kwargs)
+    except TypeError as exc:
+        if "unexpected keyword argument 'thinking'" not in str(exc):
+            raise
+        request_kwargs.pop("thinking", None)
+        response = client.chat.completions.create(**request_kwargs)
     return normalize_response(response)
 
 
