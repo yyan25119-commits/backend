@@ -414,19 +414,20 @@ public class DatabaseInitializer implements CommandLineRunner {
     }
 
     private void ensureAdminUser() {
+        String adminPassword = System.getenv().getOrDefault("NAILGLOW_ADMIN_PASSWORD", "admin");
         Integer count = jdbc.queryForObject("select count(*) from users where account = 'admin' and role = 'admin'", Integer.class);
         if (count != null && count > 0) {
             jdbc.update("""
                     update users
                     set nickname = '管理员', password_hash = ?, status = '正常', favorite_style = null
                     where account = 'admin' and role = 'admin'
-                    """, AuthService.hashPassword("admin"));
+                    """, AuthService.hashPassword(adminPassword));
             return;
         }
         jdbc.update("""
                 insert into users(nickname, account, password_hash, role, status, joined_at, last_login_at, try_count, favorite_style)
                 values ('管理员', 'admin', ?, 'admin', '正常', current_timestamp, current_timestamp, 0, null)
-                """, AuthService.hashPassword("admin"));
+                """, AuthService.hashPassword(adminPassword));
     }
 
     private void ensureUserIdFloor() {
