@@ -292,17 +292,49 @@ public class AdminController {
     @GetMapping("/users")
     public Map<String, Object> users() {
         List<Map<String, Object>> list = jdbc.query("""
-                select * from users where role = 'user' order by last_login_at desc
+                select * from users
+                where role = 'user'
+                order by case status when '待审核' then 0 else 1 end, last_login_at desc
                 """, (rs, rowNum) -> userRow(rs));
         return ApiResponse.ok(Map.of("list", list, "total", list.size()));
     }
 
+    @PostMapping("/users/{id}/approve")
+    public Map<String, Object> approveUser(@PathVariable long id) {
+        int updated = jdbc.update("update users set status = '正常' where id = ? and role = 'user'", id);
+        if (updated == 0) {
+            return ApiResponse.fail("用户不存在");
+        }
+        realtime.broadcast("users.changed", Map.of("userId", id, "status", "正常"));
+        return ApiResponse.ok(Map.of("status", "正常"));
+    }
+
     @PostMapping("/users/{id}/toggle")
     public Map<String, Object> toggleUser(@PathVariable long id) {
-        String status = jdbc.queryForObject("select status from users where id = ?", String.class, id);
+        String status = jdbc.queryForObject("select status from users where id = ? and role = 'user'", String.class, id);
         String next = "正常".equals(status) ? "观察" : "正常";
-        jdbc.update("update users set status = ? where id = ?", next, id);
+        jdbc.update("update users set status = ? where id = ? and role = 'user'", next, id);
+        realtime.broadcast("users.changed", Map.of("userId", id, "status", next));
         return ApiResponse.ok(Map.of("status", next));
+    }
+
+    @DeleteMapping("/users/{id}")
+    public Map<String, Object> deleteUser(@PathVariable long id) {
+        Integer exists = jdbc.queryForObject("select count(*) from users where id = ? and role = 'user'", Integer.class, id);
+        if (exists == null || exists == 0) {
+            return ApiResponse.fail("用户不存在");
+        }
+        jdbc.update("delete from customer_photo_ratings where photo_id in (select id from customer_photos where user_id = ?)", id);
+        jdbc.update("delete from customer_photo_ratings where user_id = ?", id);
+        jdbc.update("delete from customer_photos where user_id = ?", id);
+        jdbc.update("delete from support_messages where conversation_id in (select id from support_conversations where user_id = ?)", id);
+        jdbc.update("delete from support_conversations where user_id = ?", id);
+        jdbc.update("delete from auth_sessions where user_id = ?", id);
+        jdbc.update("delete from appointments where user_id = ?", id);
+        jdbc.update("delete from try_on_tasks where user_id = ?", id);
+        jdbc.update("delete from users where id = ? and role = 'user'", id);
+        realtime.broadcast("users.changed", Map.of("userId", id, "deleted", true));
+        return ApiResponse.ok(Map.of("deleted", true));
     }
 
     @GetMapping("/tasks")

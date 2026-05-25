@@ -57,6 +57,9 @@ public class AuthService {
         if ("禁用".equals(rows.get(0).get("status"))) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "账号已停用");
         }
+        if ("待审核".equals(rows.get(0).get("status"))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "账号正在等待管理员审核，通过后才能登录");
+        }
 
         long userId = ((Number) rows.get(0).get("id")).longValue();
         jdbc.update("update users set last_login_at = current_timestamp where id = ?", userId);
@@ -86,9 +89,13 @@ public class AuthService {
 
         jdbc.update("""
                 insert into users(nickname, account, password_hash, role, status, joined_at, last_login_at, try_count, favorite_style)
-                values (?, ?, ?, 'user', '正常', current_timestamp, current_timestamp, 0, null)
+                values (?, ?, ?, 'user', '待审核', current_timestamp, current_timestamp, 0, null)
                 """, displayName, normalizedAccount, hashPassword(normalizedPassword));
-        return login(normalizedAccount, normalizedPassword, "user");
+        return Map.of(
+                "pendingApproval", true,
+                "status", "待审核",
+                "message", "注册申请已提交，请等待管理员审核通过后再登录"
+        );
     }
 
     public Optional<AuthenticatedUser> authenticate(HttpServletRequest request) {
