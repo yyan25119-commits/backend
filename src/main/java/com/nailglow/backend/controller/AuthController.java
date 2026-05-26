@@ -1,6 +1,7 @@
 package com.nailglow.backend.controller;
 
 import com.nailglow.backend.ApiResponse;
+import com.nailglow.backend.service.AdminRealtimeService;
 import com.nailglow.backend.service.AuthService;
 import com.nailglow.backend.service.AuthenticatedUser;
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,9 +18,11 @@ import java.util.Map;
 @RequestMapping("/api/auth")
 public class AuthController {
     private final AuthService authService;
+    private final AdminRealtimeService realtime;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService, AdminRealtimeService realtime) {
         this.authService = authService;
+        this.realtime = realtime;
     }
 
     @PostMapping("/user/login")
@@ -34,11 +37,13 @@ public class AuthController {
 
     @PostMapping({"/register", "/user/register"})
     public Map<String, Object> register(@RequestBody Map<String, Object> payload) {
-        return ApiResponse.ok(authService.register(
+        Map<String, Object> result = authService.register(
                 text(payload, "account"),
                 text(payload, "password"),
                 text(payload, "nickname")
-        ));
+        );
+        realtime.broadcast("users.changed", Map.of("registered", true, "account", text(payload, "account")));
+        return ApiResponse.ok(result);
     }
 
     @GetMapping("/me")

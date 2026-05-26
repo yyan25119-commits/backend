@@ -397,16 +397,25 @@ public class AdminController {
                 ) latest on latest.latest_id = a.id
                 where a.status in ('已确认', '待到店')
                 """, Integer.class);
+        Integer pendingUsers = jdbc.queryForObject("""
+                select count(*)
+                from users
+                where role = 'user'
+                  and status = '待审核'
+                """, Integer.class);
 
         int supportCount = support == null ? 0 : support;
         int photoCount = photos == null ? 0 : photos;
         int appointmentCount = appointments == null ? 0 : appointments;
+        int pendingUserCount = pendingUsers == null ? 0 : pendingUsers;
+        int total = supportCount + photoCount + appointmentCount + pendingUserCount;
         return ApiResponse.ok(Map.of(
+                "users", pendingUserCount,
                 "support", supportCount,
                 "photos", photoCount,
                 "appointments", appointmentCount,
-                "total", supportCount + photoCount + appointmentCount,
-                "hasActivity", supportCount + photoCount + appointmentCount > 0
+                "total", total,
+                "hasActivity", total > 0
         ));
     }
 

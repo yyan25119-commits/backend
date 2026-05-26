@@ -1,6 +1,7 @@
 HELP.md
 target/
 runtime/
+uploads/
 /backend/
 *.log
 *.out.log
