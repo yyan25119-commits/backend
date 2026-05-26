@@ -60,6 +60,18 @@ public class AdminController {
     @Value("${nailglow.doubao.api-key:}")
     private String aiApiKey;
 
+    @Value("${nailglow.customer-agent.ai-base-url:https://ark.cn-beijing.volces.com/api/v3}")
+    private String customerAgentAiBaseUrl;
+
+    @Value("${nailglow.route-agent.ai-base-url:https://ark.cn-beijing.volces.com/api/v3}")
+    private String routeAgentAiBaseUrl;
+
+    @Value("${nailglow.trend-agent.ai-base-url:https://ark.cn-beijing.volces.com/api/v3}")
+    private String trendAgentAiBaseUrl;
+
+    @Value("${nailglow.daily-report.ai-base-url:https://ark.cn-beijing.volces.com/api/v3}")
+    private String dailyReportAiBaseUrl;
+
     public AdminController(JdbcTemplate jdbc,
                            SupportService supportService,
                            AdminRealtimeService realtime,
@@ -570,12 +582,18 @@ public class AdminController {
         Set<String> aiKeys = new LinkedHashSet<>(List.of(
                 "shared_ai_api_key",
                 "doubao_api_key",
+                "doubao_endpoint",
+                "customer_agent_base_url",
                 "customer_agent_api_key",
+                "route_agent_base_url",
                 "route_agent_api_key",
+                "trend_agent_base_url",
                 "trend_agent_api_key",
+                "daily_report_base_url",
                 "daily_report_api_key",
                 "amap_web_service_key",
                 "doubao_model",
+                "doubao_size",
                 "customer_agent_model",
                 "route_agent_model",
                 "trend_agent_model",
@@ -584,13 +602,19 @@ public class AdminController {
         List<String> aiOrder = List.of(
                 "shared_ai_api_key",
                 "doubao_api_key",
+                "doubao_endpoint",
                 "doubao_model",
+                "doubao_size",
+                "customer_agent_base_url",
                 "customer_agent_api_key",
                 "customer_agent_model",
+                "route_agent_base_url",
                 "route_agent_api_key",
                 "route_agent_model",
+                "trend_agent_base_url",
                 "trend_agent_api_key",
                 "trend_agent_model",
+                "daily_report_base_url",
                 "daily_report_api_key",
                 "daily_report_model",
                 "amap_web_service_key"
@@ -650,19 +674,29 @@ public class AdminController {
         String effectiveValue = switch (key) {
             case "shared_ai_api_key" -> systemSettingService.masked(systemSettingService.effectiveSharedAiApiKey(aiApiKey));
             case "doubao_api_key" -> systemSettingService.masked(systemSettingService.effectiveAiApiKey("doubao_api_key", aiApiKey, "DOUBAO_IMAGE_API_KEY"));
+            case "doubao_endpoint" -> systemSettingService.effectiveImageGenerationEndpoint(value);
+            case "customer_agent_base_url" -> systemSettingService.effectiveAiBaseUrl("customer_agent_base_url", customerAgentAiBaseUrl);
             case "customer_agent_api_key" -> systemSettingService.masked(systemSettingService.effectiveAiApiKey("customer_agent_api_key", aiApiKey, "CUSTOMER_AGENT_API_KEY"));
+            case "route_agent_base_url" -> systemSettingService.effectiveAiBaseUrl("route_agent_base_url", routeAgentAiBaseUrl);
             case "route_agent_api_key" -> systemSettingService.masked(systemSettingService.effectiveAiApiKey("route_agent_api_key", aiApiKey, "ROUTE_AGENT_API_KEY"));
+            case "trend_agent_base_url" -> systemSettingService.effectiveAiBaseUrl("trend_agent_base_url", trendAgentAiBaseUrl);
             case "trend_agent_api_key" -> systemSettingService.masked(systemSettingService.effectiveAiApiKey("trend_agent_api_key", aiApiKey, "TREND_AGENT_API_KEY"));
+            case "daily_report_base_url" -> systemSettingService.effectiveAiBaseUrl("daily_report_base_url", dailyReportAiBaseUrl);
             case "daily_report_api_key" -> systemSettingService.masked(systemSettingService.effectiveAiApiKey("daily_report_api_key", aiApiKey, "DAILY_REPORT_API_KEY"));
             case "amap_web_service_key" -> systemSettingService.masked(systemSettingService.effectiveAmapWebServiceKey());
+            case "doubao_size" -> systemSettingService.effectiveImageGenerationSize(value);
             default -> value;
         };
         String source = switch (key) {
             case "shared_ai_api_key" -> systemSettingService.sharedAiApiKeySource(aiApiKey);
             case "doubao_api_key" -> systemSettingService.aiApiKeySource("doubao_api_key", aiApiKey, "DOUBAO_IMAGE_API_KEY");
+            case "customer_agent_base_url" -> systemSettingService.aiBaseUrlSource("customer_agent_base_url", customerAgentAiBaseUrl);
             case "customer_agent_api_key" -> systemSettingService.aiApiKeySource("customer_agent_api_key", aiApiKey, "CUSTOMER_AGENT_API_KEY");
+            case "route_agent_base_url" -> systemSettingService.aiBaseUrlSource("route_agent_base_url", routeAgentAiBaseUrl);
             case "route_agent_api_key" -> systemSettingService.aiApiKeySource("route_agent_api_key", aiApiKey, "ROUTE_AGENT_API_KEY");
+            case "trend_agent_base_url" -> systemSettingService.aiBaseUrlSource("trend_agent_base_url", trendAgentAiBaseUrl);
             case "trend_agent_api_key" -> systemSettingService.aiApiKeySource("trend_agent_api_key", aiApiKey, "TREND_AGENT_API_KEY");
+            case "daily_report_base_url" -> systemSettingService.aiBaseUrlSource("daily_report_base_url", dailyReportAiBaseUrl);
             case "daily_report_api_key" -> systemSettingService.aiApiKeySource("daily_report_api_key", aiApiKey, "DAILY_REPORT_API_KEY");
             case "amap_web_service_key" -> systemSettingService.amapKeySource();
             default -> StringUtils.hasText(value) ? "系统设置" : "默认值";

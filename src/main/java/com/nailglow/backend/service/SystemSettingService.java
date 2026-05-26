@@ -7,6 +7,7 @@ import org.springframework.util.StringUtils;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 
 @Service
 public class SystemSettingService {
@@ -67,6 +68,27 @@ public class SystemSettingService {
         );
     }
 
+    public String effectiveImageGenerationEndpoint(String propertyValue) {
+        return normalizeImageGenerationEndpoint(firstNonBlank(
+                getText("doubao_endpoint", ""),
+                propertyValue
+        ));
+    }
+
+    public String effectiveImageGenerationSize(String propertyValue) {
+        return normalizeImageGenerationSize(firstNonBlank(
+                getText("doubao_size", ""),
+                propertyValue
+        ));
+    }
+
+    public String effectiveAiBaseUrl(String settingKey, String propertyValue) {
+        return normalizeBaseUrl(firstNonBlank(
+                getText(settingKey, ""),
+                propertyValue
+        ));
+    }
+
     public String aiApiKeySource(String settingKey, String propertyValue, String... envNames) {
         if (StringUtils.hasText(getText(settingKey, ""))) {
             return "系统设置";
@@ -111,6 +133,16 @@ public class SystemSettingService {
             return "AMAP_KEY";
         }
         return "未配置";
+    }
+
+    public String aiBaseUrlSource(String settingKey, String propertyValue) {
+        if (StringUtils.hasText(getText(settingKey, ""))) {
+            return "系统设置";
+        }
+        if (StringUtils.hasText(propertyValue)) {
+            return "应用配置";
+        }
+        return "默认值";
     }
 
     public String masked(String value) {
@@ -165,5 +197,40 @@ public class SystemSettingService {
             }
         }
         return "";
+    }
+
+    private String normalizeImageGenerationEndpoint(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        String normalized = value.trim().replaceAll("/+$", "");
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        if (lower.contains("/v1/images/generations") || lower.contains("/api/v3/images/generations")) {
+            return normalized;
+        }
+        if (lower.endsWith("/api/v3")) {
+            return normalized + "/images/generations";
+        }
+        return normalized + "/v1/images/generations";
+    }
+
+    private String normalizeImageGenerationSize(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT).replace(" ", "").replace("*", "x");
+        return switch (normalized) {
+            case "1k", "1024", "1024x1024" -> "1024x1024";
+            case "2k", "2048", "2048x2048" -> "2048x2048";
+            case "4k", "4096", "4096x4096" -> "4096x4096";
+            default -> normalized.matches("\\d{3,4}x\\d{3,4}") ? normalized : value.trim();
+        };
+    }
+
+    private String normalizeBaseUrl(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return value.trim().replaceAll("/+$", "");
     }
 }

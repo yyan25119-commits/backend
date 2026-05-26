@@ -40,6 +40,10 @@ import java.util.regex.Pattern;
 public class ExternalTrendCollectorService {
     private static final String XHS = "xiaohongshu";
     private static final String MEITUAN = "meituan";
+    private static final String REMOTE_LOGIN_DISPLAY = ":99";
+    private static final int REMOTE_LOGIN_VNC_PORT = 5900;
+    private static final int REMOTE_LOGIN_NOVNC_PORT = 6080;
+    private static final String REMOTE_LOGIN_VIEWER_URL = "/trend-login/vnc.html?autoconnect=1&resize=remote&path=trend-login/websockify";
     private static final DateTimeFormatter BATCH_STAMP = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final Pattern TITLE_NOISE = Pattern.compile("[!！?？~～|/\\\\_]+");
     private static final Pattern GENERIC_TITLE = Pattern.compile("(?i)梦中情甲|小可爱|五选一|六选一|马上做|终于|谁懂啊|真的超美|太好看|姐妹们");
@@ -295,6 +299,16 @@ public class ExternalTrendCollectorService {
         try {
             Path profilePath = resolveLoginBrowserProfileDir();
             Files.createDirectories(profilePath);
+            if (!isWindows()) {
+                prepareLinuxRemoteLoginBrowser(chromeExecutable, profilePath);
+                return Map.of(
+                        "opened", true,
+                        "chromePort", chromePort,
+                        "profileDir", profilePath.toString(),
+                        "viewerUrl", REMOTE_LOGIN_VIEWER_URL,
+                        "message", "已启动远程登录浏览器，新标签页将打开小红书登录窗口。"
+                );
+            }
             new ProcessBuilder(
                     chromeExecutable,
                     "--remote-debugging-port=" + chromePort,
@@ -525,16 +539,100 @@ public class ExternalTrendCollectorService {
         if (StringUtils.hasText(chromePath) && Files.exists(Path.of(chromePath))) {
             return chromePath;
         }
-        List<String> candidates = List.of(
+        List<String> candidates = isWindows()
+                ? List.of(
                 "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
                 "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
                 System.getenv("LOCALAPPDATA") == null ? "" : System.getenv("LOCALAPPDATA") + "\\Google\\Chrome\\Application\\chrome.exe"
+        )
+                : List.of(
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable",
+                "/usr/bin/chromium-browser",
+                "/usr/bin/chromium"
         );
         return candidates.stream()
                 .filter(StringUtils::hasText)
                 .filter(path -> Files.exists(Path.of(path)))
                 .findFirst()
                 .orElse("");
+    }
+
+    private boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    private void prepareLinuxRemoteLoginBrowser(String chromeExecutable, Path profilePath) throws IOException, InterruptedException {
+        String xvfbExecutable = requireExecutable("/usr/bin/Xvfb", "Xvfb");
+        String x11vncExecutable = requireExecutable("/usr/bin/x11vnc", "x11vnc");
+        String websockifyExecutable = requireExecutable("/usr/bin/websockify", "websockify");
+        Path noVncDir = Path.of("/usr/share/novnc");
+        if (!Files.isDirectory(noVncDir)) {
+            throw new IllegalStateException("未找到 noVNC 静态文件，请先安装 novnc");
+        }
+
+        Path runtimeDir = resolveProjectPath("runtime/trend-agent-remote-login");
+        Files.createDirectories(runtimeDir);
+        Path xvfbLog = runtimeDir.resolve("xvfb.log");
+        Path x11vncLog = runtimeDir.resolve("x11vnc.log");
+        Path websockifyLog = runtimeDir.resolve("websockify.log");
+        Path chromeLog = runtimeDir.resolve("chrome.log");
+
+        startBackgroundShellIfMissing(
+                "test -S /tmp/.X11-unix/X99",
+                shellQuote(xvfbExecutable) + " " + REMOTE_LOGIN_DISPLAY + " -screen 0 1440x900x24 -ac +extension RANDR",
+                xvfbLog
+        );
+        startBackgroundShellIfMissing(
+                "ss -ltn | grep -q ':5900 '",
+                shellQuote(x11vncExecutable) + " -display " + REMOTE_LOGIN_DISPLAY + " -forever -shared -rfbport " + REMOTE_LOGIN_VNC_PORT + " -localhost -nopw",
+                x11vncLog
+        );
+        startBackgroundShellIfMissing(
+                "ss -ltn | grep -q ':6080 '",
+                shellQuote(websockifyExecutable) + " --web " + shellQuote(noVncDir.toString()) + " " + REMOTE_LOGIN_NOVNC_PORT + " localhost:" + REMOTE_LOGIN_VNC_PORT,
+                websockifyLog
+        );
+
+        Thread.sleep(1200);
+
+        ProcessBuilder builder = new ProcessBuilder(
+                chromeExecutable,
+                "--remote-debugging-port=" + chromePort,
+                "--remote-allow-origins=*",
+                "--user-data-dir=" + profilePath,
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--new-window",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "https://www.xiaohongshu.com/explore"
+        );
+        builder.environment().put("DISPLAY", REMOTE_LOGIN_DISPLAY);
+        builder.redirectErrorStream(true);
+        builder.redirectOutput(ProcessBuilder.Redirect.appendTo(chromeLog.toFile()));
+        builder.start();
+    }
+
+    private String requireExecutable(String path, String label) {
+        if (!Files.isExecutable(Path.of(path))) {
+            throw new IllegalStateException("未找到 " + label + "，请先在服务器安装对应组件");
+        }
+        return path;
+    }
+
+    private void startBackgroundShellIfMissing(String checkCommand, String command, Path logPath) throws IOException, InterruptedException {
+        String shellCommand = checkCommand
+                + " || nohup " + command + " >> " + shellQuote(logPath.toString()) + " 2>&1 &";
+        Process process = new ProcessBuilder("bash", "-lc", shellCommand)
+                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.appendTo(logPath.toFile()))
+                .start();
+        process.waitFor();
+    }
+
+    private String shellQuote(String value) {
+        return "'" + value.replace("'", "'\"'\"'") + "'";
     }
 
     private Path resolveCollectorScriptPath() {

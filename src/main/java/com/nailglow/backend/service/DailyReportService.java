@@ -131,6 +131,7 @@ public class DailyReportService {
 
     private void applyAiInsights(Map<String, Object> data) {
         String effectiveApiKey = systemSettingService.effectiveAiApiKey("daily_report_api_key", apiKey, "DAILY_REPORT_API_KEY");
+        String effectiveBaseUrl = systemSettingService.effectiveAiBaseUrl("daily_report_base_url", aiBaseUrl);
         String effectiveModel = systemSettingService.getText("daily_report_model", aiModel);
         if (!StringUtils.hasText(effectiveApiKey)) {
             data.put("ai", Map.of("generated", false, "source", "rule_fallback", "model", effectiveModel, "message", "未配置运营日报 AI Key，已使用规则化日报。"));
@@ -146,7 +147,7 @@ public class DailyReportService {
                     Map.of("role", "user", "content", mapper.writeValueAsString(dailyReportAiContext(data)))
             ));
 
-            HttpRequest request = HttpRequest.newBuilder(URI.create(chatEndpoint()))
+            HttpRequest request = HttpRequest.newBuilder(URI.create(chatEndpoint(effectiveBaseUrl)))
                     .timeout(Duration.ofSeconds(timeoutSeconds))
                     .header("Authorization", "Bearer " + effectiveApiKey)
                     .header("Content-Type", "application/json")
@@ -297,8 +298,8 @@ public class DailyReportService {
         data.put("ai", Map.of("generated", true, "source", "volcengine_chat", "model", model, "message", "AI 已基于近 7 日真实数据生成运营日报。"));
     }
 
-    private String chatEndpoint() {
-        String base = StringUtils.hasText(aiBaseUrl) ? aiBaseUrl.trim() : "https://ark.cn-beijing.volces.com/api/v3";
+    private String chatEndpoint(String configuredBaseUrl) {
+        String base = StringUtils.hasText(configuredBaseUrl) ? configuredBaseUrl.trim() : "https://ark.cn-beijing.volces.com/api/v3";
         if (base.endsWith("/chat/completions")) {
             return base;
         }

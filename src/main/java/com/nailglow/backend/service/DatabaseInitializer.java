@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Objects;
 
 @Component
 public class DatabaseInitializer implements CommandLineRunner {
@@ -467,16 +468,24 @@ public class DatabaseInitializer implements CommandLineRunner {
     private void seedSettings() {
         ensureSettingRow("shared_ai_api_key", "共享 AI API Key", "供客服 AI、路线规划 AI、流行趋势 AI 复用；未填写时自动读取环境变量。", "");
         ensureSettingRow("doubao_api_key", "试戴美甲 AI Key", "用于 AI 美甲试穿图生成；未填写时自动回退到共享 AI Key 或环境变量。", "");
+        ensureSettingRow("doubao_endpoint", "试戴美甲 API URL", "用于 AI 美甲试穿图生成；可填写 Lumio 基础地址或完整 /v1/images/generations。", "https://api.lumio.games/");
+        ensureSettingRow("doubao_model", "试戴美甲 AI 模型", "用于 AI 美甲试穿图生成；默认建议 gpt-image-2。", "gpt-image-2");
+        ensureSettingRow("doubao_size", "试戴美甲 图片尺寸", "用于 AI 美甲试穿图生成；支持 1k / 1024x1024 等尺寸。", "1024x1024");
+        ensureSettingRow("customer_agent_base_url", "客服 AI URL", "用于售前、售后、预约和排队客服 Agent，可填写完整模型网关基础地址。", "https://ark.cn-beijing.volces.com/api/v3");
         ensureSettingRow("customer_agent_api_key", "客服 AI Key", "用于售前、售后、预约和排队客服 Agent；未填写时自动回退到共享 AI Key 或环境变量。", "");
+        ensureSettingRow("route_agent_base_url", "路线规划 AI URL", "用于门店推荐、路线整理和到店建议，可填写完整模型网关基础地址。", "https://ark.cn-beijing.volces.com/api/v3");
         ensureSettingRow("route_agent_api_key", "路线规划 AI Key", "用于门店推荐、路线整理和到店建议；未填写时自动回退到共享 AI Key 或环境变量。", "");
+        ensureSettingRow("trend_agent_base_url", "流行趋势 AI URL", "用于热门款式检索词生成、趋势分析和运营话术生成，可填写完整模型网关基础地址。", "https://ark.cn-beijing.volces.com/api/v3");
         ensureSettingRow("trend_agent_api_key", "流行趋势 AI Key", "用于热门款式检索词生成、趋势分析和运营话术生成；未填写时自动回退到共享 AI Key 或环境变量。", "");
+        ensureSettingRow("daily_report_base_url", "运营日报 AI URL", "只给运营日报总结、客诉诊断和低分款式优化建议使用，可填写基础地址或完整 /chat/completions。", "https://ark.cn-beijing.volces.com/api/v3");
         ensureSettingRow("daily_report_api_key", "运营日报专用 AI Key", "只给运营日报总结、客诉诊断和低分款式优化建议使用；未填写时自动回退到共享 AI Key 或火山引擎环境变量。", "");
         ensureSettingRow("amap_web_service_key", "高德地图 API Key", "用于路线规划 AI 调用高德 Web Service；未填写时自动读取环境变量。", "");
-        ensureSettingRow("doubao_model", "试戴美甲 AI 模型", "用于 AI 美甲试穿图生成；可覆盖默认 DOUBAO_IMAGE_MODEL。", "doubao-seedream-4-0-250828");
         ensureSettingRow("customer_agent_model", "客服 AI 模型", "用于售前、售后、预约和排队客服 Agent。", "doubao-seed-2-0-pro-260215");
         ensureSettingRow("route_agent_model", "路线规划 AI 模型", "用于门店推荐、路线整理和到店建议。", "doubao-seed-2-0-pro-260215");
         ensureSettingRow("trend_agent_model", "流行趋势 AI 模型", "用于热门款式检索词生成、趋势分析和运营话术生成。", "doubao-seed-2-0-pro-260215");
         ensureSettingRow("daily_report_model", "运营日报专用 AI 模型", "只给日报总结、客诉归因和运营建议使用，默认使用火山引擎豆包文本模型。", "doubao-seed-2-0-pro-260215");
+        ensureSettingValueIfLegacy("doubao_endpoint", "https://api.lumio.games/", "https://ark.cn-beijing.volces.com/api/v3/images/generations");
+        ensureSettingValueIfLegacy("doubao_model", "gpt-image-2", "doubao-seedream-4-0-250828");
         removeSettingRow("score_rule");
         removeSettingRow("upload_limit");
         removeSettingRow("store_capacity");
@@ -500,6 +509,26 @@ public class DatabaseInitializer implements CommandLineRunner {
 
     private void removeSettingRow(String key) {
         jdbc.update("delete from system_settings where key_name = ?", key);
+    }
+
+    private void ensureSettingValueIfLegacy(String key, String desiredValue, String... legacyValues) {
+        try {
+            String current = jdbc.queryForObject("select value_text from system_settings where key_name = ?", String.class, key);
+            if (current == null || current.isBlank()) {
+                jdbc.update("update system_settings set value_text = ?, updated_at = current_timestamp where key_name = ?",
+                        desiredValue, key);
+                return;
+            }
+            for (String legacyValue : legacyValues) {
+                if (Objects.equals(current.trim(), legacyValue)) {
+                    jdbc.update("update system_settings set value_text = ?, updated_at = current_timestamp where key_name = ?",
+                            desiredValue, key);
+                    return;
+                }
+            }
+        } catch (Exception ignored) {
+            // Best-effort migration only.
+        }
     }
 
     private Object[] row(String styleCode, String name, String tag, String tags, String description, String imageUrl,

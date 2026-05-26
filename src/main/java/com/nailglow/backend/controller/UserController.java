@@ -19,11 +19,17 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -57,6 +63,10 @@ public class UserController {
     private final ScoreModelService scoreModel;
     private final AuthService authService;
     private final AdminRealtimeService realtime;
+    private final HttpClient remoteImageHttpClient = HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .connectTimeout(Duration.ofSeconds(8))
+            .build();
 
     public UserController(JdbcTemplate jdbc, DoubaoImageService doubao, ScoreModelService scoreModel, AuthService authService, AdminRealtimeService realtime) {
         this.jdbc = jdbc;
@@ -83,7 +93,7 @@ public class UserController {
             @RequestParam(value = "handPhoto", required = false) MultipartFile handPhoto
     ) throws IOException {
         long userId = authService.require(request, "user").id();
-        List<Long> ids = parseIds(styleIds);
+        List<Long> ids = normalizeSelectedStyleIds(parseIds(styleIds));
         if (ids.isEmpty()) {
             return ApiResponse.fail("请至少选择一款美甲");
         }
@@ -105,6 +115,10 @@ public class UserController {
         byte[] photoBytes = handPhoto.getBytes();
         String dataUrl = "data:%s;base64,%s".formatted(contentType, Base64.getEncoder().encodeToString(photoBytes));
         Path tempImage = Files.createTempFile("nailglow-hand-", extensionOf(handPhoto.getOriginalFilename(), contentType));
+        Path handReferenceImage = persistTemporaryTryOnInput(handPhoto.getOriginalFilename(), contentType, photoBytes);
+        String handReferenceUrl = publicAbsoluteUrl(request, "/uploads/try-on-inputs/" + handReferenceImage.getFileName());
+        List<Path> temporaryReferenceImages = new ArrayList<>();
+        temporaryReferenceImages.add(handReferenceImage);
 
         List<Map<String, Object>> results = new ArrayList<>();
         try {
@@ -112,28 +126,42 @@ public class UserController {
             for (Map<String, Object> style : styles) {
                 String styleName = String.valueOf(style.get("name"));
                 String desc = String.valueOf(style.get("desc"));
-                String styleImageUrl = String.valueOf(style.getOrDefault("imageUrl", ""));
-                DoubaoImageService.GenerationResult generation = doubao.generate(styleName, desc, dataUrl, styleImageUrl);
+                PreparedReferenceImage styleReferenceImage = prepareStyleReferenceImage(
+                        request,
+                        String.valueOf(style.getOrDefault("imageUrl", ""))
+                );
+                if (styleReferenceImage.temporaryFile() != null) {
+                    temporaryReferenceImages.add(styleReferenceImage.temporaryFile());
+                }
+                DoubaoImageService.GenerationResult generation = doubao.generate(
+                        styleName,
+                        desc,
+                        handReferenceUrl,
+                        dataUrl,
+                        styleReferenceImage.publicUrl()
+                );
+                if (!generation.remote() || !StringUtils.hasText(generation.imageUrl())) {
+                    return ApiResponse.fail(StringUtils.hasText(generation.message()) ? generation.message() : "AI 试穿生成失败，请稍后重试");
+                }
                 Map<String, Object> scoreResult = scoreModel.predict(tempImage, String.valueOf(style.getOrDefault("styleCode", "nail_01")));
                 int score = (int) Math.round(((Number) scoreResult.getOrDefault("score", 86)).doubleValue());
                 String metrics = metricsJson(scoreResult, score);
                 String advice = buildAdvice(styleName, score);
-                String resultImageUrl = generation.remote() ? generation.imageUrl() : dataUrl;
+                String resultImageUrl = generation.imageUrl();
                 results.add(resultPayload(style, score, resultImageUrl, advice, metrics, generation));
             }
         } finally {
             Files.deleteIfExists(tempImage);
+            for (Path temporaryReferenceImage : temporaryReferenceImages) {
+                Files.deleteIfExists(temporaryReferenceImage);
+            }
         }
 
         if (results.isEmpty()) {
             return ApiResponse.fail("试穿生成失败，请稍后重试");
         }
 
-        Map<String, Object> bestResult = results.stream()
-                .max((left, right) -> Integer.compare(
-                        ((Number) left.getOrDefault("score", 0)).intValue(),
-                        ((Number) right.getOrDefault("score", 0)).intValue()))
-                .orElse(results.get(0));
+        Map<String, Object> bestResult = results.get(0);
         Map<String, Object> bestStyle = bestResult.get("style") instanceof Map<?, ?> styleMap
                 ? new LinkedHashMap<>((Map<String, Object>) styleMap)
                 : styles.get(0);
@@ -599,8 +627,146 @@ public class UserController {
         return ids;
     }
 
+    private List<Long> normalizeSelectedStyleIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        return List.of(ids.get(0));
+    }
+
     private String joinIds(List<Long> ids) {
         return String.join(",", ids.stream().map(String::valueOf).toList());
+    }
+
+    private PreparedReferenceImage prepareStyleReferenceImage(HttpServletRequest request, String rawImageUrl) {
+        if (!StringUtils.hasText(rawImageUrl)) {
+            return new PreparedReferenceImage("", null);
+        }
+        String imageUrl = rawImageUrl.trim();
+        if (imageUrl.startsWith("data:")) {
+            return persistDataUrlReferenceImage(request, imageUrl);
+        }
+        if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
+            DownloadedImage downloaded = downloadRemoteImage(imageUrl);
+            if (downloaded != null) {
+                try {
+                    Path temporaryFile = persistTemporaryTryOnInput("style-reference", downloaded.contentType(), downloaded.bytes());
+                    return new PreparedReferenceImage(
+                            publicAbsoluteUrl(request, "/uploads/try-on-inputs/" + temporaryFile.getFileName()),
+                            temporaryFile
+                    );
+                } catch (IOException ignored) {
+                }
+            }
+            return new PreparedReferenceImage(imageUrl, null);
+        }
+        String normalizedPath = imageUrl.startsWith("/") ? imageUrl : "/" + imageUrl;
+        return new PreparedReferenceImage(publicAbsoluteUrl(request, normalizedPath), null);
+    }
+
+    private Path persistTemporaryTryOnInput(String originalFilename, String contentType, byte[] bytes) throws IOException {
+        Path dir = Path.of("uploads", "try-on-inputs").toAbsolutePath().normalize();
+        Files.createDirectories(dir);
+        String filename = "hand-" + UUID.randomUUID() + extensionOf(originalFilename, contentType);
+        Path target = dir.resolve(filename).normalize();
+        Files.write(target, bytes);
+        return target;
+    }
+
+    private PreparedReferenceImage persistDataUrlReferenceImage(HttpServletRequest request, String dataUrl) {
+        try {
+            int commaIndex = dataUrl.indexOf(',');
+            if (commaIndex <= 5) {
+                return new PreparedReferenceImage("", null);
+            }
+            String metadata = dataUrl.substring(5, commaIndex);
+            String contentType = metadata.split(";")[0].trim().toLowerCase();
+            if (!contentType.startsWith("image/")) {
+                contentType = "image/png";
+            }
+            byte[] bytes = Base64.getDecoder().decode(dataUrl.substring(commaIndex + 1));
+            Path temporaryFile = persistTemporaryTryOnInput("style-reference", contentType, bytes);
+            return new PreparedReferenceImage(
+                    publicAbsoluteUrl(request, "/uploads/try-on-inputs/" + temporaryFile.getFileName()),
+                    temporaryFile
+            );
+        } catch (Exception ignored) {
+            return new PreparedReferenceImage("", null);
+        }
+    }
+
+    private DownloadedImage downloadRemoteImage(String imageUrl) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(imageUrl))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("User-Agent", "Mozilla/5.0 NailGlow/1.0")
+                    .GET()
+                    .build();
+            HttpResponse<byte[]> response = remoteImageHttpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return null;
+            }
+            byte[] bytes = response.body();
+            if (bytes == null || bytes.length == 0 || bytes.length > 10L * 1024 * 1024) {
+                return null;
+            }
+            String contentType = normalizeRemoteImageContentType(
+                    response.headers().firstValue("Content-Type").orElse(""),
+                    imageUrl
+            );
+            return new DownloadedImage(bytes, contentType);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String normalizeRemoteImageContentType(String headerContentType, String imageUrl) {
+        String headerValue = firstNonBlank(headerContentType);
+        if (StringUtils.hasText(headerValue)) {
+            String normalized = headerValue.split(";")[0].trim().toLowerCase();
+            if (normalized.startsWith("image/")) {
+                return normalized;
+            }
+        }
+        String lowerUrl = String.valueOf(imageUrl).toLowerCase();
+        if (lowerUrl.endsWith(".jpg") || lowerUrl.endsWith(".jpeg")) {
+            return "image/jpeg";
+        }
+        if (lowerUrl.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (lowerUrl.endsWith(".gif")) {
+            return "image/gif";
+        }
+        return "image/png";
+    }
+
+    private String publicAbsoluteUrl(HttpServletRequest request, String path) {
+        String scheme = firstNonBlank(request.getHeader("X-Forwarded-Proto"), request.getScheme(), "http");
+        String host = firstNonBlank(request.getHeader("X-Forwarded-Host"), request.getHeader("Host"), request.getServerName());
+        if (!StringUtils.hasText(host)) {
+            int port = request.getServerPort();
+            host = request.getServerName() + ((port > 0 && port != 80 && port != 443) ? ":" + port : "");
+        }
+        return scheme + "://" + host + path;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
+    private record PreparedReferenceImage(String publicUrl, Path temporaryFile) {
+    }
+
+    private record DownloadedImage(byte[] bytes, String contentType) {
     }
 
     private String styleName(Long styleId) {
@@ -776,7 +942,7 @@ public class UserController {
         data.put("resultImageUrl", resultImageUrl);
         data.put("advice", advice);
         data.put("metrics", metrics);
-        data.put("provider", generation.remote() ? "doubao" : "local");
+        data.put("provider", generation.remote() ? "lumio" : "local");
         data.put("prompt", generation.prompt());
         data.put("message", generation.message());
         return data;

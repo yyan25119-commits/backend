@@ -73,13 +73,14 @@ public class TrendMonitorAgentService {
         }
         try {
             String effectiveApiKey = systemSettingService.effectiveAiApiKey("trend_agent_api_key", apiKey, "TREND_AGENT_API_KEY");
+            String effectiveBaseUrl = systemSettingService.effectiveAiBaseUrl("trend_agent_base_url", aiBaseUrl);
             String effectiveModel = systemSettingService.getText("trend_agent_model", aiModel);
             ProcessBuilder builder = new ProcessBuilder(pythonBin, scriptPath.toString());
             builder.directory(Path.of(".").toAbsolutePath().normalize().toFile());
             builder.environment().put("PYTHONIOENCODING", "utf-8");
             builder.environment().put("PYTHONUTF8", "1");
-            builder.environment().put("ARK_BASE_URL", aiBaseUrl);
-            builder.environment().put("AI_BASE_URL", aiBaseUrl);
+            builder.environment().put("ARK_BASE_URL", effectiveBaseUrl);
+            builder.environment().put("AI_BASE_URL", effectiveBaseUrl);
             if (effectiveApiKey != null && !effectiveApiKey.isBlank()) {
                 builder.environment().put("ARK_API_KEY", effectiveApiKey);
                 builder.environment().put("AI_API_KEY", effectiveApiKey);

@@ -53,13 +53,14 @@ public class RouteAgentService {
         try {
             String effectiveApiKey = systemSettingService.effectiveAiApiKey("route_agent_api_key", apiKey, "ROUTE_AGENT_API_KEY");
             String effectiveAmapKey = systemSettingService.effectiveAmapWebServiceKey();
+            String effectiveBaseUrl = systemSettingService.effectiveAiBaseUrl("route_agent_base_url", aiBaseUrl);
             String effectiveModel = systemSettingService.getText("route_agent_model", aiModel);
             ProcessBuilder builder = new ProcessBuilder(pythonBin, scriptPath.toString());
             builder.directory(Path.of(".").toAbsolutePath().normalize().toFile());
             builder.environment().put("PYTHONIOENCODING", "utf-8");
             builder.environment().put("PYTHONUTF8", "1");
-            builder.environment().put("ARK_BASE_URL", aiBaseUrl);
-            builder.environment().put("AI_BASE_URL", aiBaseUrl);
+            builder.environment().put("ARK_BASE_URL", effectiveBaseUrl);
+            builder.environment().put("AI_BASE_URL", effectiveBaseUrl);
             builder.environment().put("ROUTE_AGENT_MODEL", effectiveModel);
             if (effectiveApiKey != null && !effectiveApiKey.isBlank()) {
                 builder.environment().put("ARK_API_KEY", effectiveApiKey);
